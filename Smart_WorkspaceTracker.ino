@@ -3,22 +3,35 @@
 #include <WiFiST.h>
 #include <SPI.h>
 #include <ArduinoHttpClient.h>
-#include <RunningMedian.h> // Library by Rob Tillaart (https://github.com/RobTillaart/RunningMedian)
-#include <secrets.h> // create your own secrets.h file
+#include <RunningMedian.h>     // Library by Rob Tillaart
+#include <Adafruit_HTU21DF.h>  // Library by Adafruit for HTU21D/SHT21
+#include <DHT.h>// Library for DHT11 temperature sensor
+#include <secrets.h>           // create your own secrets.h file
 
 // BH1750 I2C Light Sensor
-#define BH1750_ADDR 0x23
+#define BH1750_ADDR 0x23        // Try 0x5C if this doesn't work
 #define BH1750_CONTINUOUS_HIGH_RES_MODE 0x10
 
 // MAX4466 microphone pin
-#define MIC_PIN PA0 // Connect to analog pin (adjust as needed for your STM32 board)
+#define MIC_PIN PA0             // Connect to analog pin (adjust as needed)
+
+// Temperature Sensor pin (OneWire)
+#define DHT11_PIN PA1     // Connect temperature sensor data pin here
+#define DHTTYPE DHT11      // DHT11 sensor type
+
+DHT dht(DHT11_PIN, DHTTYPE); // Initialize DHT11 object
 
 // WiFi module pins for STM32 B-L4S51-IOT01A
 SPIClass SPI_3(PC12, PC11, PC10);
 WiFiClass WiFi(&SPI_3, PE0, PE1, PE8, PB13);
 
+// Initialize library objects
+Adafruit_HTU21DF htu;           // Create humidity sensor object
+
+
 // Function prototypes
 void connectWifi();
+void scanI2CDevices();
 // Light sensor functions
 void BH1750_init();
 float BH1750_readLightLevel();
@@ -26,30 +39,89 @@ String getLightDescription(float lux);
 // Microphone functions
 int readMicrophoneLevel();
 String getSoundDescription(int soundLevel);
+// New sensor functions
+bool initializeHumiditySensor();
+float readHumidity();
+String getHumidityDescription(float humidity);
+float readTemperature();
+String getTemperatureDescription(float temperature);
 // ThingSpeak function
-void sendDataToThingSpeak(float lux, int soundLevel, String lightDesc, String soundDesc);
+void sendDataToThingSpeak(float lux, int soundLevel, float humidity, float temperature,
+                          String lightDesc, String soundDesc, String humidityDesc, String tempDesc);
 
 // Microphone sampling parameters
-const int sampleWindow = 50; // Sample window width in ms (50 ms = 20Hz)
-const int numReadings = 100; // Number of readings to take
+const int sampleWindow = 50;    // Sample window width in ms (50 ms = 20Hz)
+const int numReadings = 100;    // Number of readings to take
 
 void setup() {
   Serial.begin(115200);
   delay(2000);
   Serial.println("STM32 Environmental Monitor with ThingSpeak");
 
-  // Initialize I2C for BH1750 (default pins)
+  // Initialize I2C for sensors
   Wire.begin();
+  
+  // Scan for I2C devices
+  scanI2CDevices();
 
   // Initialize BH1750 sensor
   BH1750_init();
   Serial.println("BH1750 Light Sensor Initialized");
   
+  // Initialize humidity sensor
+  if (initializeHumiditySensor()) {
+    Serial.println("Humidity Sensor Initialized");
+  } else {
+    Serial.println("Failed to initialize Humidity Sensor!");
+  }
+  
+  // Initialize temperature sensor
+  dht.begin();
+  Serial.println("Temperature Sensor Initialized");
+  
   // Initialize analog pin for microphone
   pinMode(MIC_PIN, INPUT);
   Serial.println("MAX4466 Microphone Initialized");
   
-  connectWifi();  // Connect to Wi-Fi
+  // Connect to Wi-Fi
+  connectWifi();
+}
+
+// Scan for I2C devices to find correct address
+void scanI2CDevices() {
+  byte error, address;
+  int deviceCount = 0;
+  
+  Serial.println("Scanning for I2C devices...");
+  
+  for(address = 1; address < 127; address++) {
+    Wire.beginTransmission(address);
+    error = Wire.endTransmission();
+    
+    if (error == 0) {
+      Serial.print("I2C device found at address 0x");
+      if (address < 16) {
+        Serial.print("0");
+      }
+      Serial.println(address, HEX);
+      deviceCount++;
+    }
+    else if (error == 4) {
+      Serial.print("Unknown error at address 0x");
+      if (address < 16) {
+        Serial.print("0");
+      }
+      Serial.println(address, HEX);
+    }
+  }
+  
+  if (deviceCount == 0) {
+    Serial.println("No I2C devices found!");
+  } else {
+    Serial.print("Found ");
+    Serial.print(deviceCount);
+    Serial.println(" I2C device(s)");
+  }
 }
 
 void connectWifi() {
@@ -79,18 +151,21 @@ void connectWifi() {
 }
 
 void loop() {
-  // Read light level
+  // Read light level (with better error handling)
   float lux = BH1750_readLightLevel();
-  String lightDescription = getLightDescription(lux);
+  String lightDescription;
   
   Serial.print("Light Intensity: ");
   if (lux >= 0) {
     Serial.print(lux);
     Serial.println(" lux");
+    lightDescription = getLightDescription(lux);
     Serial.print("Light Description: ");
     Serial.println(lightDescription);
   } else {
     Serial.println("Error reading BH1750");
+    lux = -1; // Keep negative value to indicate error
+    lightDescription = "Sensor Error";
   }
 
   // Read sound level
@@ -102,9 +177,39 @@ void loop() {
   Serial.print("Sound Description: ");
   Serial.println(soundDescription);
 
+  // Read humidity
+  float humidity = readHumidity();
+  String humidityDescription = getHumidityDescription(humidity);
+  
+  Serial.print("Humidity: ");
+  if (humidity >= 0) {
+    Serial.print(humidity);
+    Serial.println(" %");
+    Serial.print("Humidity Description: ");
+    Serial.println(humidityDescription);
+  } else {
+    Serial.println("Error reading humidity sensor");
+  }
+  
+  // Read temperature
+  float temperature = readTemperature();
+  String temperatureDescription = getTemperatureDescription(temperature);
+  
+  Serial.print("Temperature: ");
+  if (!isnan(temperature)) {
+    Serial.print(temperature);
+    Serial.println(" °C");
+    Serial.print("Temperature Description: ");
+    Serial.println(temperatureDescription);
+  } else {
+    Serial.println("Error reading temperature sensor");
+    temperature = -1000; // Error value
+  }
+
   // Only send data if WiFi is connected
   if (WiFi.status() == WL_CONNECTED) {
-    sendDataToThingSpeak(lux, soundLevel, lightDescription, soundDescription);
+    sendDataToThingSpeak(lux, soundLevel, humidity, temperature,
+                         lightDescription, soundDescription, humidityDescription, temperatureDescription);
   } else {
     Serial.println("WiFi disconnected! Reconnecting...");
     connectWifi();
@@ -185,8 +290,56 @@ String getSoundDescription(int soundLevel) {
   else return "Very Loud";
 }
 
-// Send both light and sound data to ThingSpeak
-void sendDataToThingSpeak(float lux, int soundLevel, String lightDesc, String soundDesc) {
+// Initialize humidity sensor
+bool initializeHumiditySensor() {
+  if (htu.begin()) {
+    return true;
+  }
+  return false;
+}
+
+// Read humidity from HTU21D/SHT21 sensor
+float readHumidity() {
+  float h = htu.readHumidity();
+  if (isnan(h)) {
+    Serial.println("Failed to read humidity!");
+    return -1;
+  }
+  return h;
+}
+
+// Return a human-readable description based on humidity value
+String getHumidityDescription(float humidity) {
+  if (humidity < 0) return "Sensor Error";
+  else if (humidity < 30) return "Very Dry";
+  else if (humidity < 40) return "Dry";
+  else if (humidity < 60) return "Comfortable";
+  else if (humidity < 70) return "Humid";
+  else return "Very Humid";
+}
+
+// Read temperature from DS18B20 sensor
+// Read temperature from DHT11 sensor
+float readTemperature() {
+    float tempC = dht.readTemperature(); // returns temperature in Celsius
+    return tempC;
+}
+
+// Return a human-readable description based on temperature value
+String getTemperatureDescription(float tempC) {
+  if (isnan(tempC)) return "Sensor Error";
+  else if (tempC < 0) return "Freezing";
+  else if (tempC < 10) return "Very Cold";
+  else if (tempC < 20) return "Cool";
+  else if (tempC < 25) return "Comfortable";
+  else if (tempC < 30) return "Warm";
+  else if (tempC < 35) return "Hot";
+  else return "Very Hot";
+}
+
+// Send all sensor data to ThingSpeak
+void sendDataToThingSpeak(float lux, int soundLevel, float humidity, float temperature,
+                          String lightDesc, String soundDesc, String humidityDesc, String tempDesc) {
   Serial.println("Sending data to ThingSpeak...");
 
   // Use regular WiFiClient
@@ -195,15 +348,47 @@ void sendDataToThingSpeak(float lux, int soundLevel, String lightDesc, String so
   // Create HTTP client for ThingSpeak
   HttpClient http(client, thingSpeakHost, thingSpeakPort);
 
-  String encodedMetadata = "Light:" + lightDesc + ",%20Sound:" + soundDesc;
-  encodedMetadata.replace(" ", "%20"); 
+  // Build metadata string with descriptions from all sensors
+  String encodedMetadata = "";
+  
+  // Only include working sensors in metadata
+  if (lux >= 0) {
+    encodedMetadata += "Light:" + lightDesc;
+  }
+  
+  encodedMetadata += encodedMetadata.length() > 0 ? ",%20" : "";
+  encodedMetadata += "Sound:" + soundDesc;
+  
+  if (humidity >= 0) {
+    encodedMetadata += ",%20Humidity:" + humidityDesc;
+  }
+  
+  if (!isnan(temperature) && temperature > -999) {
+    encodedMetadata += ",%20Temp:" + tempDesc;
+  }
+  
+  encodedMetadata.replace(" ", "%20");
   
   // Create the data string for ThingSpeak
-  // field1 = light level, field2 = sound level
-  String data = "api_key=" + String(writeAPIKey) + 
-                "&field1=" + String(lux, 2) + 
-                "&field2=" + String(soundLevel) +
-                "&metadata=" + encodedMetadata;
+  // field1 = light, field2 = sound, field3 = humidity, field4 = temperature
+  String data = "api_key=" + String(writeAPIKey);
+  
+  // Only include data from working sensors
+  if (lux >= 0) {
+    data += "&field1=" + String(lux, 2);
+  }
+  
+  data += "&field2=" + String(soundLevel);
+  
+  if (humidity >= 0) {
+    data += "&field3=" + String(humidity, 1);
+  }
+  
+  if (!isnan(temperature)&& temperature > -999) {
+    data += "&field4=" + String(temperature, 2);
+  }
+  
+  data += "&metadata=" + encodedMetadata;
   
   Serial.print("Data string: ");
   Serial.println(data);
