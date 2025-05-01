@@ -4,8 +4,8 @@ import { EnvironmentalData, AISuggestion, DataPoint } from '../types';
 import { ThingSpeakService } from '../services/thingspeak';
 
 // ThingSpeak credentials
-const THINGSPEAK_API_KEY = "30UR3E4YV4TMDUL4"; // Your read API key
-const THINGSPEAK_CHANNEL_ID = "2939374"; // Your channel ID
+const THINGSPEAK_API_KEY = import.meta.env.VITE_THINGSPEAK_API_KEY; // Your read API key
+const THINGSPEAK_CHANNEL_ID = import.meta.env.VITE_THINGSPEAK_CHANNEL_ID; // Your channel ID
 
 export function useEnvironmentalData() {
   const [data, setData] = useState<EnvironmentalData>(mockEnvironmentalData);
