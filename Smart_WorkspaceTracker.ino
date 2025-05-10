@@ -13,7 +13,7 @@
 #define BH1750_CONTINUOUS_HIGH_RES_MODE 0x10
 
 // MAX4466 microphone pin
-#define MIC_PIN PA0             // Connect to analog pin (adjust as needed)
+#define MIC_PIN PC0             // Connect to analog pin (adjust as needed)
 
 // Temperature Sensor pin (OneWire)
 #define DHT11_PIN PA1     // Connect temperature sensor data pin here
