@@ -29,7 +29,7 @@ This project implements an environmental monitoring system using the STM32 B-L4S
 | Sensor  | Pin Name     | STM32 Pin         | Description                                 |
 |---------|--------------|-------------------|---------------------------------------------|
 | BH1750  | SCL, SDA, AD0| PB8, PB9, GND     | I2C communication (default I2C pins)        |
-| MAX4466 | OUT          | PA0               | Analog input for sound level                |
+| MAX4466 | OUT          | PC0               | Analog input for sound level                |
 | DHT11   | DAT          | PA1               | Digital input for temperature & humidity    |
 
 > **Note:**  
